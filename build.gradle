@@ -1,0 +1,84 @@
+plugins {
+    id 'java'
+    id 'org.springframework.boot' version '3.4.2'
+    id 'io.spring.dependency-management' version '1.1.7'
+    id "com.diffplug.spotless" version "6.17.0"
+}
+
+group = 'com.JarApplication'
+version = '0.0.1-SNAPSHOT'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+configurations {
+    compileOnly {
+        extendsFrom annotationProcessor
+    }
+}
+
+spotless {
+    java {
+//        googleJavaFormat()
+        // optional: you can specify a specific version (>= 1.8) and/or switch to AOSP style
+        //   and/or reflow long strings
+        //   and/or use custom group artifact (you probably don't need this)
+        googleJavaFormat('1.23.0').aosp().reflowLongStrings().groupArtifact('com.google.googlejavaformat:google-java-format')
+    }
+}
+
+repositories {
+    mavenCentral()
+    maven { url 'https://jitpack.io' }
+}
+
+dependencies {
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.15.0'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.postgresql:postgresql'
+
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'io.jsonwebtoken:jjwt-impl:0.11.5'
+    implementation 'io.jsonwebtoken:jjwt-api:0.11.5'
+    implementation 'io.jsonwebtoken:jjwt-jackson:0.11.5'
+    implementation 'org.springframework.boot:spring-boot-starter-data-mongodb'
+    implementation 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+    developmentOnly 'org.springframework.boot:spring-boot-devtools'
+    implementation 'jakarta.servlet:jakarta.servlet-api'
+    implementation 'org.springframework.kafka:spring-kafka'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+
+    implementation 'org.apache.kafka:kafka-clients:3.9.0'
+    implementation 'org.apache.pdfbox:pdfbox:2.0.29'
+
+    implementation 'org.json:json:20210307'
+
+    implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    implementation 'org.apache.commons:commons-pool2'
+    implementation 'com.fasterxml.jackson.core:jackson-databind'
+
+//    implementation 'com.github.vladimir-bukhtoyarov:bucket4j-core:8.8.1'
+    implementation 'com.bucket4j:bucket4j-redis:8.9.0'
+
+    implementation 'io.micrometer:micrometer-registry-prometheus'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+    implementation 'joda-time:joda-time:2.12.7'
+
+    implementation 'org.springframework.boot:spring-boot-starter-logging'
+    implementation 'net.logstash.logback:logstash-logback-encoder:6.6'
+
+}
+
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
