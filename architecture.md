@@ -1,569 +1,804 @@
 # Kirana Store Backend Architecture
 
+## Contents
+- [1. Document Purpose](#section-1)
+- [2. System Context and Scope](#section-2)
+- [3. High-Level Design (HLD)](#section-3)
+- [4. Codebase Architecture (MVC + DAO + DTO)](#section-4)
+- [5. API Contracts and Interface Design](#section-5)
+- [6. Low-Level Design (LLD) Workflows](#section-6)
+- [7. Datastore Design (PostgreSQL, MongoDB, Redis)](#section-7)
+- [8. Transactionality, Atomicity, and Data Integrity](#section-8)
+- [9. Caching Design and Invalidation](#section-9)
+- [10. Rate Limiting Architecture](#section-10)
+- [11. Distributed Locking Design](#section-11)
+- [12. Security Architecture](#section-12)
+- [13. OOP, SOLID, and Design Patterns](#section-13)
+- [14. Maintainability and Error Handling](#section-14)
+- [15. Observability (Metrics, Logging, Monitoring)](#section-15)
+- [16. Testing Strategy (Mandatory)](#section-16)
+- [17. Scalability, Bottlenecks, and Capacity Planning](#section-17)
+- [18. Tradeoffs and Alternatives](#section-18)
+- [19. Known Gaps and Prioritized Roadmap](#section-19)
+- [20. Technical References](#section-20)
+
+<a id="section-1"></a>
 ## 1. Document Purpose
 
-This document explains the architecture of the Kirana Store backend in a way that is useful for both:
+This document explains:
 
-- beginners (to understand what each part does),
-- experienced backend engineers (to evaluate design quality, tradeoffs, and scalability).
+- what the current implementation does,
+- why the architecture is shaped this way,
+- what to improve to make it production-grade.
 
-It combines:
+It is written for two audiences:
 
-- HLD (High-Level Design),
-- LLD (Low-Level Design),
-- current implementation behavior,
-- recommended production-grade improvements.
+- beginner backend engineers who need mental models and clear terminology,
+- experienced engineers who want design depth, tradeoff analysis, and concrete improvement paths.
 
-## 2. Problem and Domain Context
+<a id="section-2"></a>
+## 2. System Context and Scope
 
-The system is a transaction-register backend for Kirana stores. Core domain needs:
+The system is a backend service for Kirana store transaction management.
 
-1. Track purchases and refunds.
-2. Handle currency conversion.
-3. Maintain transaction ledger for reporting.
-4. Support user authentication/authorization.
-5. Protect APIs with rate limiting.
-6. Scale for concurrent usage while preserving data integrity.
+Primary capabilities:
 
+1. User registration and login.
+2. JWT-based authorization for protected APIs.
+3. Product catalog CRUD/read APIs.
+4. Purchase bill creation and refund handling.
+5. Currency conversion using an external FX API.
+6. Report generation input through Kafka events.
+7. Monitoring and operational telemetry.
+
+Out-of-scope today:
+
+- inventory decrement/replenishment workflows,
+- payment gateway integration,
+- accounting exports (GST, ledger files),
+- admin backoffice UI.
+
+<a id="section-3"></a>
 ## 3. High-Level Design (HLD)
 
-### 3.1 Container-Level View
+### 3.1 Context Diagram
 
 ```mermaid
 flowchart TB
-    U[Client Apps / Postman]
-    S[Spring Boot API]
-    M[(MongoDB)]
-    P[(PostgreSQL)]
-    R[(Redis)]
-    K[(Kafka)]
+    Client[Client Apps / Postman]
+    API[Spring Boot Application]
+    PG[(PostgreSQL)]
+    MG[(MongoDB)]
+    RD[(Redis)]
+    KF[(Kafka)]
     FX[FxRates API]
-    PM[Prometheus]
-    GF[Grafana]
-    ELK[ELK Stack]
+    PR[Prometheus]
+    GR[Grafana]
+    ELK[ELK Pipeline]
 
-    U --> S
-    S --> M
-    S --> P
-    S --> R
-    S --> K
-    S --> FX
-    PM --> S
-    GF --> PM
-    S --> ELK
+    Client --> API
+    API --> PG
+    API --> MG
+    API --> RD
+    API --> KF
+    API --> FX
+    PR --> API
+    GR --> PR
+    API --> ELK
 ```
 
-### 3.2 Why Polyglot Persistence Here
-
-- PostgreSQL stores `transactions` ledger because:
-  - strong relational consistency is useful for financial history,
-  - date-range reporting queries are straightforward.
-- MongoDB stores `users`, `products`, `bills`, `refresh_tokens` because:
-  - document structure maps naturally for flexible payloads (bill items, user roles),
-  - developer velocity is high for CRUD-oriented features.
-- Redis is used for:
-  - low-latency cache (FX conversion values),
-  - a natural extension point for distributed rate limiting and locking.
-
-## 4. Layered Architecture and MVC
-
-The code follows a layered approach with MVC style endpoint handling:
+### 3.2 Component Decomposition
 
 ```mermaid
 flowchart LR
-    C[Controller]
-    S[Service]
-    D[DAO]
-    R[Repository]
-    DB[(Data Store)]
-    DTO[DTO / Model Mappers]
+    Controller[Controllers]
+    Security[JWT Filter + SecurityConfig]
+    Service[Services]
+    DAO[DAO Layer]
+    Repo[Spring Data Repositories]
+    AOP[AOP Aspects]
+    Utility[DTO Mappers + Utils]
 
-    C --> S --> D --> R --> DB
-    C --> DTO
-    S --> DTO
+    Controller --> Security
+    Security --> Service
+    Controller --> Service
+    Service --> DAO --> Repo
+    AOP -. cross-cutting .-> Controller
+    AOP -. cross-cutting .-> Service
+    Service --> Utility
+    Controller --> Utility
 ```
 
-### 4.1 MVC Mapping in Current Code
+### 3.3 Deployment Topology (Docker Compose)
 
-- **Controller (presentation/API layer)**:
-  - `feature_users/controllers/UserController`
-  - `feature_products/controllers/ProductController`
-  - `feature_transactions/controllers/TransactionController`
-  - `auth/controller/RefreshController`
-- **Service (business logic layer)**:
-  - `UserServiceImp`, `AuthServiceImp`, `ProductServiceImp`,
-  - `BillingServiceImp`, `TransactionServiceImpl`, `ConversionServiceImp`, `ReportService`.
-- **Model/DTO layer**:
-  - request/response DTOs (`UserRequest`, `PurchaseRequest`, `PurchaseResponse`, etc.),
-  - utility mappers (`UserDtoUtil`, `ProductDtoUtil`, `BillDtoUtil`, `TransactionDtoUtil`).
-- **DAO layer**:
-  - `UserDAO`, `ProductDao`, `BillDao`, `TransactionDao`, `RefreshTokenDAO`, `ReportDao`.
-- **Persistence/repository layer**:
-  - Spring Data repositories for MongoDB/JPA.
+Current compose orchestrates:
 
-### 4.2 DTO and DAO Concepts (Beginner-Friendly)
+- `spring-boot-app`,
+- `postgres`, `mongodb`, `redis`,
+- `kafka`,
+- `prometheus`, `grafana`,
+- optional ELK services (requires missing local config files to be added).
 
-- **DTO (Data Transfer Object)**:
-  - Used to transfer data across layers or over API boundary.
-  - Example: `PurchaseRequest` receives client input; `PurchaseResponse` sends output.
-  - Benefit: avoid exposing persistence entities directly.
+Operational note:
 
-- **DAO (Data Access Object)**:
-  - Encapsulates data retrieval/write operations.
-  - Example: `TransactionDao.findByBillId`, `ProductDao.findByType`.
-  - Benefit: service layer stays focused on business rules, not query plumbing.
+- app expects dependencies by container hostnames (`postgres`, `mongo`, `redis`, `kafka`) as defined in `application.properties`.
 
-## 5. Domain Flows (LLD)
+<a id="section-4"></a>
+## 4. Codebase Architecture (MVC + DAO + DTO)
 
-### 5.1 Purchase Flow
+### 4.1 Layer Responsibilities
+
+1. Controller Layer
+   - Handles HTTP I/O only.
+   - Extracts headers/tokens and delegates to services.
+2. Service Layer
+   - Owns business logic and orchestration.
+   - Coordinates currency conversion, billing, persistence flow.
+3. DAO Layer
+   - Encapsulates access methods and pagination/query orchestration.
+4. Repository Layer
+   - Spring Data adapters to MongoDB/JPA.
+5. DTO/Mapper Layer
+   - Performs conversions across request models, response models, and entities.
+
+### 4.2 Module Map
+
+- `feature_users`: registration/authentication domain.
+- `auth`: refresh token persistence and token refresh workflow.
+- `feature_products`: product catalog domain.
+- `feature_transactions`: purchase/refund/currency conversion domain.
+- `feature_reports`: read/report domain over transaction ledger.
+- `filters`, `config`, `AOP`: platform-level cross-cutting concerns.
+
+### 4.3 Dependency Direction Rules
+
+Recommended dependency direction:
+
+- Controller -> Service Interface
+- Service -> DAO Interface
+- DAO -> Repository
+- DTO Mapper is stateless helper
+
+Current implementation mostly follows this, but some controllers/services directly inject concrete `*Imp` classes; replacing with interfaces improves testability and inversion of control.
+
+<a id="section-5"></a>
+## 5. API Contracts and Interface Design
+
+### 5.1 Response Envelope
+
+All endpoints currently use `ApiResponse`:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "status": "OK",
+  "error": null,
+  "errorMessage": null,
+  "errorCode": null
+}
+```
+
+### 5.2 Endpoint Inventory
+
+| Endpoint | Method | Auth | Domain |
+|---|---|---|---|
+| `/register` | POST | Public | User |
+| `/login` | POST | Public | User/Auth |
+| `/generate-token` | GET | Access + Refresh headers | Auth |
+| `/v1/api/products` | GET | Protected | Product |
+| `/v1/api/products/type` | GET | Protected | Product |
+| `/v1/api/products/add` | POST | ADMIN | Product |
+| `/purchase` | POST | Protected | Transaction |
+| `/refund` | POST | Protected | Transaction |
+
+Important implementation note:
+
+- `TransactionController` uses `@RestController("/v1/api")`, which sets bean name, not path mapping.
+- Intended base route should be `@RequestMapping("/v1/api")`.
+
+### 5.3 Contract Quality Recommendations
+
+1. Adopt OpenAPI (`springdoc-openapi`) for generated, versioned API docs.
+2. Return semantic HTTP status codes (`201`, `400`, `401`, `403`, `404`, `409`, `500`) instead of `200` for most failures.
+3. Add strong request validation (`@NotBlank`, `@Size`, `@Pattern`, `@Valid`) and central error serialization.
+4. Introduce idempotency headers for write operations:
+   - `Idempotency-Key` for `/purchase`, `/refund`.
+
+<a id="section-6"></a>
+## 6. Low-Level Design (LLD) Workflows
+
+### 6.1 Login and Token Issuance
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant Controller as TransactionController
-    participant JWT as JwtUtil
-    participant TxService as TransactionServiceImpl
-    participant BillService as BillingServiceImp
-    participant Calc as CalculateBill
-    participant Product as ProductServiceImp/ProductDao
-    participant FX as ConversionServiceImp
-    participant Redis as Redis Cache
-    participant FxApi as FxRates API
-    participant BillDao as BillDao(Mongo)
-    participant TxDao as TransactionDao(Postgres)
+    participant C as Client
+    participant UC as UserController
+    participant AS as AuthService
+    participant AM as AuthenticationManager
+    participant US as UserService
+    participant RS as RefreshTokenService
+    participant JU as JwtUtil
 
-    Client->>Controller: POST /purchase + Bearer token + billItems
-    Controller->>JWT: extractUserId/extractUsername
-    Controller->>TxService: makePurchase(request)
-    TxService->>BillService: generateBills(request)
-    BillService->>Calc: calculateBill(request)
-    Calc->>Product: findByName(itemName) for each item
-    BillService->>FX: calculate(currencyCode)
-    FX->>Redis: getValueFromRedis(currency_INR)
+    C->>UC: POST /login
+    UC->>AS: authenticate(username,password)
+    AS->>AM: authenticate(credentials)
+    AS->>US: getUserRolesByUsername
+    AS->>US: getUserIdByUsername
+    AS->>RS: saveRefreshToken(userId)
+    AS->>JU: generateToken(username,roles,userId,sessionId)
+    AS-->>UC: AuthResponse
+    UC-->>C: ApiResponse(data=AuthResponse)
+```
+
+### 6.2 Purchase Workflow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant TC as TransactionController
+    participant TS as TransactionService
+    participant BS as BillingService
+    participant CB as CalculateBill
+    participant PS as ProductService
+    participant CS as ConversionService
+    participant Redis as Redis
+    participant FX as FxRates API
+    participant BD as BillDao
+    participant TD as TransactionDao
+
+    C->>TC: POST /purchase
+    TC->>TS: makePurchase(request)
+    TS->>BS: generateBills(request)
+    BS->>CB: calculateBill(items)
+    CB->>PS: findByName(itemName)
+    BS->>CS: calculate(currencyCode)
+    CS->>Redis: get(currency_INR)
     alt cache miss
-        FX->>FxApi: fetch latest rates
-        FX->>Redis: setValueToRedis(ttl=endOfMinute)
+      CS->>FX: latest rates
+      CS->>Redis: set(key,value,ttl)
     end
-    BillService->>BillDao: save bill document
-    BillService-->>TxService: TransactionDto
-    TxService->>TxDao: save TransactionEntity(PURCHASE, amountInINR)
-    TxService-->>Controller: PurchaseResponse
-    Controller-->>Client: ApiResponse
+    BS->>BD: save Bill (Mongo)
+    TS->>TD: save Transaction PURCHASE (Postgres)
+    TS-->>TC: PurchaseResponse
+    TC-->>C: ApiResponse
 ```
 
-### 5.2 Refund Flow
+### 6.3 Refund Workflow
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant Controller as TransactionController
-    participant JWT as JwtUtil
-    participant TxService as TransactionServiceImpl
-    participant TxDao as TransactionDao(Postgres)
+    participant C as Client
+    participant TC as TransactionController
+    participant TS as TransactionService
+    participant TD as TransactionDao
 
-    Client->>Controller: POST /refund + billId
-    Controller->>JWT: extractUserId(token)
-    Controller->>TxService: makeRefund(billId, userId)
-    TxService->>TxDao: findByBillId(billId)
-    TxService->>TxService: validate ownership + not already refunded
-    TxService->>TxDao: save REFUND transaction
-    TxService-->>Controller: "Refund successful"
-    Controller-->>Client: ApiResponse
+    C->>TC: POST /refund
+    TC->>TS: makeRefund(billId,userId)
+    TS->>TD: findByBillId(billId)
+    TS->>TS: validate owner + not already refunded
+    TS->>TD: save REFUND row
+    TS-->>TC: "Refund successful"
+    TC-->>C: ApiResponse
 ```
 
-### 5.3 Reporting Flow (Async Trigger)
+### 6.4 Report Generation Trigger
 
 ```mermaid
 flowchart LR
-    Producer[External Kafka Producer]
-    Topic[(Kafka topic: test-topic)]
-    Consumer[ReportKafkaListener]
+    Producer[External Producer]
+    Topic[(Kafka test-topic)]
+    Listener[ReportKafkaListener]
     Service[ReportService]
-    DAO[ReportDao]
-    PG[(PostgreSQL transactions)]
+    Dao[ReportDao]
+    Ledger[(PostgreSQL transactions)]
 
-    Producer --> Topic --> Consumer --> Service --> DAO --> PG
+    Producer --> Topic --> Listener --> Service --> Dao --> Ledger
 ```
 
-The current implementation prints report results to console rather than exposing report endpoints.
+Current behavior prints computed report output to console. A production design should return report objects through dedicated APIs or publish report artifacts.
 
-## 6. Security Design
+<a id="section-7"></a>
+## 7. Datastore Design (PostgreSQL, MongoDB, Redis)
 
-### 6.1 Authentication and Authorization
+### 7.1 Why Two Primary Datastores
 
-- Login uses `AuthenticationManager` + `CustomUserDetailsService`.
-- Access token:
-  - generated by `JwtUtil`,
-  - includes `roles`, `userId`, `sessionId`,
-  - expires in 5 minutes.
-- Refresh token:
-  - persisted in MongoDB (`RefreshToken` document),
-  - expiry set to 15 minutes.
-- Route protection:
-  - `SecurityConfig` permits `/login`, `/register`, `/actuator/**`,
-  - all other routes require authentication.
-- Role-based auth:
-  - `@PreAuthorize("hasRole('ADMIN')")` on product create route.
+- PostgreSQL is used for transactional ledger rows (purchase/refund) requiring reliable date-range analytics.
+- MongoDB stores flexible document aggregates:
+  - users,
+  - products,
+  - bills (with embedded line items),
+  - refresh tokens.
 
-### 6.2 Security Caveats in Current Implementation
+This is a classic polyglot persistence tradeoff: better model fit per domain at the cost of cross-store consistency complexity.
 
-1. Refresh token verification uses BCrypt hash equality incorrectly:
-   - BCrypt hashes are salted; encoding same plaintext again produces different hash.
-   - Compare should use `encoder.matches(rawToken, storedHash)`.
-2. Token secret is hardcoded in constants (should come from secure env/secret manager).
-3. Error payload consistency can be improved in filters and exception handlers.
-
-## 7. Rate Limiting Architecture
-
-Current code has two mechanisms:
-
-1. **Global filter-based limiter** (`RateLimiterFilter`)
-   - one in-memory token bucket (~100 req/min for all requests on this app instance).
-2. **Method-level limiter via AOP** (`@RateLimiter` + `RateLimiterAspect`)
-   - per-method in-memory buckets, e.g., login and product listing.
-
-### 7.1 Current Limiter Tradeoffs
-
-- Simple and easy to add.
-- Not distributed:
-  - limits reset per instance; horizontal scaling breaks strict global limits.
-- No user/IP granularity in global filter.
-
-### 7.2 Recommended Distributed Limiter Design
-
-Use Redis-backed bucket per key, where key can be:
-
-- `userId + route`,
-- IP + route for anonymous routes.
-
-For Bucket4j, use Redis proxy manager and define refill policy centrally. This gives consistent limits across all app instances.
-
-## 8. Datastore Design and Schema
-
-## 8.1 PostgreSQL (Relational Ledger)
-
-Table: `transactions`
+### 7.2 PostgreSQL Schema
 
 ```mermaid
 erDiagram
     TRANSACTIONS {
         uuid transaction_id PK
-        double amount
-        varchar bill_id
-        varchar user_id
-        varchar transaction_type
-        timestamp date
+        decimal amount
+        string bill_id
+        string user_id
+        string transaction_type
+        datetime date
     }
 ```
 
-### Why SQL here
+Recommended indexes:
 
-- Financial ledger-like data benefits from:
-  - deterministic query semantics,
-  - transactional writes,
-  - indexed range scans for reports.
+1. `idx_transactions_bill_id` on `bill_id`.
+2. `idx_transactions_date` on `date`.
+3. `idx_transactions_user_id_date` on `(user_id, date)`.
 
-## 8.2 MongoDB (Document Model)
+Expected query patterns:
 
-Collections:
+- refund validation by `bill_id`,
+- report query by date range,
+- user-centric audit by `user_id`.
 
-- `users`: account identity + roles.
-- `products`: catalog documents.
-- `bills`: purchased items, user-selected currency, bill totals.
-- `refreshToken` collection (default naming from `@Document` without explicit collection).
+### 7.3 MongoDB Document Model
+
+Current collections:
+
+- `users`,
+- `products`,
+- `bills`,
+- `refreshToken` (derived from `@Document` default naming for `RefreshToken`).
+
+Mermaid-safe ER diagram (fixed syntax; no `[]` attribute types):
 
 ```mermaid
 erDiagram
     USERS {
         string id PK
         string username
-        string password
-        string[] roles
+        string password_hash
+        string roles_serialized
     }
     PRODUCTS {
         string id PK
-        string name UNIQUE
+        string name UK
         string type
-        double price
-        string date
+        decimal price
+        string created_date
     }
     BILLS {
-        string billId PK
-        string userId
-        double totalAmount
-        string currencyCode
-        date billDate
-        object[] billItems
+        string bill_id PK
+        string user_id
+        decimal total_amount
+        string currency_code
+        datetime bill_date
+        string bill_items_json
     }
     REFRESH_TOKENS {
         string id PK
-        string token UNIQUE
-        string userId INDEX
-        date timeout
-        date createdAt
+        string token_hash UK
+        string user_id
+        datetime timeout
+        datetime created_at
     }
 ```
 
-### Why NoSQL here
+Mongo index recommendations:
 
-- Bills naturally embed `billItems` arrays.
-- Product and user objects can evolve with fewer migration constraints.
+1. `products.name` unique (already present).
+2. `products.type` for filtered pagination.
+3. `bills.userId` for user history and refunds.
+4. `refreshToken.userId` and TTL or archival policy for expired sessions.
 
-## 8.3 SQL vs NoSQL: Key Tradeoffs
+### 7.4 Redis Key Design
 
-| Dimension | PostgreSQL | MongoDB |
+Current key usage:
+
+- FX cache key: `<CURRENCY>_INR`
+- value: conversion factor
+- TTL: until end of current minute
+
+Recommended keyspace conventions:
+
+- `fx:v1:<currency>:inr` for conversion cache,
+- `rate:v1:<principal>:<route>` for rate limiting tokens,
+- `lock:v1:refund:<billId>` for distributed lock,
+- `idem:v1:purchase:<idempotencyKey>` for duplicate request defense.
+
+<a id="section-8"></a>
+## 8. Transactionality, Atomicity, and Data Integrity
+
+### 8.1 Current State
+
+`@Transactional` is applied in transaction service methods, but write path spans two independent stores:
+
+1. MongoDB bill write.
+2. PostgreSQL transaction write.
+
+There is no distributed transaction boundary across both stores in current design.
+
+### 8.2 Failure Matrix
+
+| Step | Failure point | Outcome |
 |---|---|---|
-| Strength | ACID, joins, strong consistency query model | Flexible schema, nested documents, rapid iteration |
-| Best used for in this project | immutable transaction ledger + date reports | users/products/bills/session-like docs |
-| Risk | migration overhead for shape changes | weaker relational constraints across collections |
-| Mitigation | migration tooling + transactional boundaries | validation rules, indexes, and service-level invariants |
+| Bill save succeeds, transaction save fails | after Mongo write | orphan bill without ledger row |
+| Bill save fails, transaction save not attempted | before Postgres write | no record; safe rollback-like behavior |
+| Refund double-submit race | concurrent requests | duplicate refund rows unless guarded |
 
-## 8.4 Redis Usage
+### 8.3 Recommended Integrity Patterns
 
-Current usage:
+1. Outbox + async projector:
+   - write source-of-truth row + outbox event in one transaction,
+   - project bill/read models asynchronously.
+2. Saga orchestration:
+   - explicit compensation if subsequent step fails.
+3. Idempotency keys:
+   - one client command maps to one durable business result.
 
-- FX rate cache key: `<CURRENCY>_INR`.
-- TTL: remaining milliseconds to end-of-minute.
+<a id="section-9"></a>
+## 9. Caching Design and Invalidation
 
-Recommended expanded usage:
+### 9.1 Current Cache Strategy
 
-- distributed rate limiting keys,
-- distributed locks,
-- idempotency keys for purchase/refund APIs.
+- Read-through-like behavior in `ConversionServiceImp`.
+- Cache miss triggers external FX API call.
+- TTL aligned to minute granularity.
 
-## 9. Transactionality, Atomicity, and Race Conditions
+### 9.2 Why This Works
 
-### 9.1 Current Behavior
+- FX rates are volatile but not per-millisecond.
+- Minute-level refresh significantly reduces external API calls.
 
-`@Transactional` is present on service methods in `TransactionServiceImpl`, but purchase flow spans:
+### 9.3 Risks and Mitigations
 
-- MongoDB write (`BillDao.save`) and
-- PostgreSQL write (`TransactionDao.save`).
+1. Stale rates around market movement:
+   - include timestamp in response metadata.
+2. Cache penetration (invalid currency):
+   - cache negative lookups for short TTL.
+3. Hot key contention:
+   - use local tiny near-cache plus Redis if needed at larger scale.
 
-These are not part of one distributed transaction by default.
+<a id="section-10"></a>
+## 10. Rate Limiting Architecture
 
-### 9.2 Consistency Implication
+### 10.1 Current Implementation
 
-Potential partial-write scenario:
+1. Global request filter bucket:
+   - single in-memory bucket around 100 req/min.
+2. AOP per-method bucket:
+   - in-memory limits by annotated method (`@RateLimiter(limit = X)`).
 
-- Bill saved in MongoDB,
-- Transaction write fails in PostgreSQL,
-- system ends with inconsistent cross-store state.
+### 10.2 Gaps
 
-### 9.3 Production-Grade Mitigation Patterns
+- not distributed across multiple instances,
+- no tenant/user/IP-specific fairness globally,
+- no response headers (`X-RateLimit-*`, `Retry-After`) to help clients backoff.
 
-1. **Outbox Pattern**
-   - Commit authoritative event in same DB transaction as ledger write, then async sync others.
-2. **Saga / Compensating Transactions**
-   - If step 2 fails, execute compensating rollback operation for step 1.
-3. **Single source of truth**
-   - Keep financial truth in one transactional store and replicate denormalized views asynchronously.
+### 10.3 Production Blueprint
 
-## 10. Distributed Locking Design (Recommended)
+Distributed token-bucket with Redis:
 
-Distributed locking is useful for preventing double-refund or duplicate purchase processing when parallel requests hit the same bill.
+1. derive principal key (`userId` or client IP),
+2. derive route key (`POST:/purchase`),
+3. consume token atomically in Redis,
+4. return standardized 429 response with retry metadata.
 
-### 10.1 Redis Lock Strategy
+<a id="section-11"></a>
+## 11. Distributed Locking Design
 
-Lock key format:
+### 11.1 Why Locking Is Needed
 
-- `lock:refund:<billId>`
-- `lock:purchase:<idempotencyKey>`
+Use locks for race-prone critical sections:
 
-Acquire lock (pseudo):
+- refund on same `billId`,
+- purchase retried concurrently with same idempotency key.
 
-1. `SET key value NX PX <ttlMs>`
-2. If success, proceed.
-3. On finally, unlock only if value matches owner token (Lua compare-and-delete).
+### 11.2 Correct Redis Lock Semantics
 
-### 10.2 Why owner-token unlock matters
+Acquire:
 
-Without owner-token check, one request can accidentally release another request's lock after timeout/reacquire cycles.
+1. generate owner token UUID,
+2. `SET lockKey ownerToken NX PX <leaseMs>`.
 
-## 11. Design Patterns and OOP Principles
+Release:
 
-### 11.1 Patterns already visible in code
+1. Lua script compare-and-delete:
+   - delete only if stored token equals owner token.
 
-1. **DAO Pattern**
-   - Encapsulates data operations.
-2. **DTO/Mapper Pattern**
-   - Utility mappers convert entity <-> API models.
-3. **Strategy-by-interface**
-   - Services exposed as interfaces (`AuthService`, `ProductService`, etc.) with concrete implementations.
-4. **Aspect-Oriented Programming (AOP)**
-   - Cross-cutting behavior for capitalization and rate limiting.
+### 11.3 Safety Considerations
 
-### 11.2 SOLID Assessment
+- lock lease must exceed worst-case critical section runtime,
+- refresh lease for long operations (watchdog),
+- never unlock blindly.
 
-- **S (Single Responsibility)**: mostly good separation by layer and feature package.
-- **O (Open/Closed)**: service interfaces help extension without editing callers.
-- **L (Liskov Substitution)**: implementation classes generally substitutable via interfaces.
-- **I (Interface Segregation)**: service interfaces are focused, not overly broad.
-- **D (Dependency Inversion)**: partially followed; some classes depend directly on concrete impls (e.g., controllers injecting `*Imp` classes), which can be improved.
+<a id="section-12"></a>
+## 12. Security Architecture
 
-### 11.3 Recommended idiomatic Java/Spring refinements
+### 12.1 Current Security Flow
 
-1. Inject interfaces instead of concrete classes in controllers/services.
-2. Use immutable request DTOs for safer APIs where possible.
-3. Replace broad `RuntimeException` with domain-specific custom exceptions.
-4. Prefer constructor injection consistently (already mostly followed).
-5. Use structured logging with correlation IDs.
+1. User logs in with credentials.
+2. Spring Security authenticates user against Mongo user store (`CustomUserDetailsService`).
+3. JWT contains:
+   - `roles`,
+   - `userId`,
+   - `sessionId`.
+4. `JwtFilter` validates and loads authorities.
+5. `@PreAuthorize` enforces role checks for specific endpoints.
 
-## 12. Maintainability and Readability Principles
+### 12.2 Security Risk Review
 
-### 12.1 Decoupling and abstraction
+1. Refresh token verification currently hashes and compares incorrectly.
+   - must use `BCryptPasswordEncoder.matches(raw, storedHash)`.
+2. Secret key is hardcoded.
+   - move to environment variable or secret manager.
+3. Very short token expiration may be good for security, but refresh path must be robust.
+4. Error messages should avoid leaking security-sensitive internals.
 
-- Keep business rules in service layer only.
-- Keep persistence-only logic in DAO/repository.
-- Keep controllers thin (input/output and delegation only).
+### 12.3 Hardening Checklist
 
-### 12.2 Naming and coding style
+1. Rotate JWT secret regularly.
+2. Add token revocation strategy by session/version.
+3. Add login brute-force protections.
+4. Add audit logs for auth events.
+5. Consider refresh-token rotation per use.
 
-- Use descriptive method names for intent (`makePurchase`, `generateBills`).
-- Keep package names aligned to bounded context (`feature_transactions`, etc.).
+<a id="section-13"></a>
+## 13. OOP, SOLID, and Design Patterns
 
-### 12.3 Exceptions and error contracts
+### 13.1 OOP Usage in Current Code
 
-- Maintain a stable error format in `ApiResponse`.
-- Introduce error codes per domain (`AUTH_`, `TXN_`, `PRODUCT_`).
-- Prefer proper HTTP statuses (currently many errors return HTTP 200 with error body).
+- Encapsulation:
+  - domain data encapsulated in entity/model classes.
+- Abstraction:
+  - service and repository interfaces abstract implementation details.
+- Polymorphism:
+  - interface-driven service contracts (`AuthService`, `ProductService`, etc.).
 
-### 12.4 Logging
+### 13.2 Design Patterns Applied
 
-- Log at domain boundaries:
-  - incoming request metadata (no sensitive data),
-  - critical DB writes,
-  - external API failures,
-  - Kafka consumption outcomes.
+1. DAO pattern.
+2. DTO + Mapper pattern.
+3. Dependency Injection pattern (Spring container).
+4. AOP pattern for cross-cutting concerns.
+5. Repository pattern via Spring Data.
 
-## 13. API Contracts (Current, and Recommended Improvements)
+### 13.3 SOLID Deep Dive
 
-## 13.1 Current routes in code
+1. Single Responsibility:
+   - good packaging by feature domains.
+2. Open/Closed:
+   - service interfaces allow extension without changing callers.
+3. Liskov:
+   - implementations generally preserve interface contracts.
+4. Interface Segregation:
+   - interfaces are reasonably focused.
+5. Dependency Inversion:
+   - partially achieved; improve by injecting interfaces end-to-end.
 
-- `POST /register`
-- `POST /login`
-- `GET /generate-token`
-- `GET /v1/api/products`
-- `GET /v1/api/products/type`
-- `POST /v1/api/products/add` (ADMIN)
-- `POST /purchase`
-- `POST /refund`
+<a id="section-14"></a>
+## 14. Maintainability and Error Handling
 
-Note: transaction controller likely intended `/v1/api/...` but currently uses `@RestController("/v1/api")`, so route prefix is not applied as expected.
+### 14.1 Maintainability Standards
 
-## 13.2 Request/Response summary
+1. Keep controllers thin and declarative.
+2. Keep service methods cohesive and deterministic.
+3. Keep DAO methods focused on persistence concerns.
+4. Use descriptive naming for domain intent.
+5. Keep mapping logic out of controllers.
 
-| Endpoint | Auth | Request | Response `data` |
-|---|---|---|---|
-| `POST /register` | no | username/password/roles | saved user |
-| `POST /login` | no | username/password | `AuthResponse` with tokens |
-| `GET /generate-token` | yes + refresh header | headers only | new `AuthResponse` |
-| `POST /v1/api/products/add` | ADMIN | name/type/price | created product |
-| `GET /v1/api/products` | yes | page/size | list of products |
-| `GET /v1/api/products/type` | yes | category/page/size | list of products |
-| `POST /purchase` | yes | currencyCode + billItems | `PurchaseResponse` |
-| `POST /refund` | yes | billId | status message |
+### 14.2 Custom Exception Strategy
 
-## 13.3 Recommended contract improvements
+Recommended exception taxonomy:
 
-1. Use `@RequestMapping("/v1/api")` on `TransactionController`.
-2. Return `201 Created` for create operations.
-3. Return error HTTP statuses (`4xx/5xx`) instead of `200`.
-4. Add validation annotations (`@NotBlank`, `@Size`, etc.) consistently.
-5. Publish OpenAPI spec (`springdoc-openapi`) for live API docs.
+- `ValidationException` (client input),
+- `DomainRuleViolationException` (business rule conflicts),
+- `NotFoundException`,
+- `AuthenticationException`,
+- `AuthorizationException`,
+- `IntegrationException` (external dependency failures).
 
-## 14. Scalability, Bottlenecks, and Resilience
+Map these to stable API errors:
 
-### 14.1 Likely bottlenecks
+- code (`TXN_409_ALREADY_REFUNDED`),
+- message (human-readable),
+- httpStatus,
+- traceId.
 
-1. In-memory rate limiting under multi-instance deployment.
-2. External FX API dependency latency/failure.
-3. Cross-datastore inconsistency in purchase flow.
-4. Missing idempotency can duplicate writes on retries.
-5. Kafka report output currently only logs, not persisted/report endpointed.
+### 14.3 Logging Guidance
 
-### 14.2 Horizontal scaling approach
+Use structured logs with stable fields:
 
-1. Make rate limit distributed (Redis).
-2. Add idempotency key support for write APIs.
-3. Add retry + circuit breaker around external FX calls.
-4. Use async eventing/outbox for cross-store synchronization.
-5. Add indexes:
-   - Postgres: `(bill_id)`, `(date)`, `(user_id, date)`.
-   - Mongo: `products.name` unique already, plus `products.type`, `bills.userId`, `refreshToken.userId`.
+- `traceId`, `spanId`, `userId`, `billId`, `endpoint`, `status`, `latencyMs`.
 
-## 15. Testing Strategy (Mandatory Standard)
+Do not log secrets:
 
-Current repo has no `src/test` tests yet. For production readiness, tests should be mandatory for APIs and business-critical methods.
+- passwords,
+- tokens,
+- raw authorization headers.
 
-### 15.1 Unit tests (fast, isolated)
+<a id="section-15"></a>
+## 15. Observability (Metrics, Logging, Monitoring)
 
-Cover:
+### 15.1 Metrics
 
-1. `CalculateBill` item total calculations and product-not-found behavior.
-2. `ConversionServiceImp` cache-hit/cache-miss and invalid currency path.
-3. `TransactionServiceImpl` refund validation branches.
-4. DTO mapper utilities for expected transformations.
-5. `JwtUtil` token parse/expiry behavior.
+Current stack:
 
-Tools:
+- Spring Actuator + Micrometer + Prometheus.
 
-- JUnit 5
-- Mockito
-- AssertJ
+High-value custom metrics to add:
 
-### 15.2 Integration tests
+1. `purchase_requests_total{status=...}`
+2. `refund_requests_total{status=...}`
+3. `fx_cache_hit_ratio`
+4. `fx_api_latency_ms`
+5. `rate_limit_rejections_total`
+6. `kafka_report_events_total`
 
-Use Spring Boot test slices and Testcontainers:
+### 15.2 Logging
 
-- PostgreSQL container for transaction repository/report queries.
-- MongoDB container for user/product/bill/refresh token repos.
-- Redis container for cache and distributed components.
-- Kafka container for report listener flow.
+Current code logs via standard Spring logging and can route to ELK using logstash encoder dependencies.
 
-### 15.3 API tests
+Add:
 
-- MockMvc or RestAssured:
-  - auth lifecycle,
-  - role-based product create,
-  - purchase/refund end-to-end with seeded data.
+- log correlation IDs,
+- error classification codes,
+- consistent JSON log format for parsing and dashboards.
 
-### 15.4 Contract and regression tests
+### 15.3 Alerting
 
-- Maintain request/response snapshots for public endpoints.
-- Add boundary tests for validation and error mapping.
+Recommended initial alerts:
 
-## 16. Key Design Decisions and Tradeoffs
+1. API 5xx error rate > threshold.
+2. FX API failure burst.
+3. Cache hit ratio drop.
+4. Kafka consumer lag increase.
+5. DB connection pool saturation.
 
-1. **Decision:** Polyglot persistence (Postgres + Mongo)
-   - **Benefit:** each store used where it fits best.
-   - **Tradeoff:** distributed consistency complexity.
+<a id="section-16"></a>
+## 16. Testing Strategy (Mandatory)
 
-2. **Decision:** JWT stateless auth + refresh token in DB
-   - **Benefit:** scalable stateless access checks.
-   - **Tradeoff:** refresh lifecycle correctness is security-critical.
+Current repository has no `src/test` coverage yet.
 
-3. **Decision:** Redis cache for FX
-   - **Benefit:** lower external API pressure and lower latency.
-   - **Tradeoff:** cache invalidation and stale data windows.
+### 16.1 Test Pyramid
 
-4. **Decision:** AOP for rate limiting/capitalization
-   - **Benefit:** cross-cutting logic without cluttering business services.
-   - **Tradeoff:** can hide behavior from beginners if not documented.
+1. Unit tests (majority):
+   - service rules, mapper behavior, utility methods.
+2. Integration tests:
+   - repository/DAO with real containers.
+3. API tests:
+   - endpoint behavior, auth flows, error semantics.
+4. Contract tests:
+   - request/response compatibility.
 
-## 17. Suggested Evolution Roadmap
+### 16.2 Unit Test Targets
 
-1. Fix refresh token verification (`matches`).
-2. Correct transaction base route mapping (`/v1/api`).
-3. Standardize error HTTP statuses.
-4. Add idempotency key support for purchase/refund.
-5. Add distributed locking for refund operations.
-6. Add Redis-backed distributed rate limiter.
-7. Add comprehensive unit/integration test suite.
-8. Add OpenAPI docs and publish API schema.
-9. Add migration/versioning strategy for databases.
+Mandatory method-level tests:
 
-## 18. Reference Links (Justification Backing)
+1. `TransactionServiceImpl.makePurchase`
+2. `TransactionServiceImpl.makeRefund`
+3. `BillingServiceImp.generateBills`
+4. `ConversionServiceImp.calculate`
+5. `AuthServiceImp.authenticate`
+6. `RefreshTokenServiceImp.generateAccessToken`
+
+### 16.3 Integration Test Targets
+
+Use Testcontainers for:
+
+- PostgreSQL,
+- MongoDB,
+- Redis,
+- Kafka (for report listener flow).
+
+### 16.4 Quality Gates
+
+1. Block merge on failed tests.
+2. Enforce minimum line/branch coverage for critical packages.
+3. Run static analysis and formatting checks in CI.
+
+<a id="section-17"></a>
+## 17. Scalability, Bottlenecks, and Capacity Planning
+
+### 17.1 Current Bottlenecks
+
+1. In-memory rate limits do not scale horizontally.
+2. FX API call path can become latency bottleneck on cache miss.
+3. Cross-store writes risk consistency gaps.
+4. Report path depends on Kafka input and currently has no report persistence/output API.
+
+### 17.2 Scale Plan
+
+1. Externalize rate limit + lock state to Redis.
+2. Add idempotency for write APIs.
+3. Add resilience patterns:
+   - retry with jitter,
+   - timeout,
+   - circuit breaker.
+4. Add async projections for analytics/reporting.
+5. Add DB index tuning and query plans for top paths.
+
+### 17.3 Capacity Signals to Track
+
+- requests per second,
+- p95/p99 latency by endpoint,
+- DB slow query count,
+- Redis command latency,
+- Kafka lag,
+- JVM heap and GC pause.
+
+<a id="section-18"></a>
+## 18. Tradeoffs and Alternatives
+
+### 18.1 SQL vs NoSQL
+
+Chosen approach:
+
+- SQL for immutable ledger-style analytics,
+- NoSQL for aggregate documents with evolving shape.
+
+Alternative:
+
+- single PostgreSQL model with JSONB for flexible documents.
+
+Tradeoff:
+
+- simpler consistency model vs reduced model flexibility.
+
+### 18.2 Eventing
+
+Current:
+
+- Kafka used for report trigger consumption.
+
+Alternative:
+
+- schedule-based reporting jobs (cron) for simpler operations.
+
+Tradeoff:
+
+- event-driven flexibility vs operational complexity.
+
+### 18.3 Security Session Model
+
+Current:
+
+- JWT + refresh token storage in Mongo.
+
+Alternative:
+
+- opaque session tokens in Redis with strict revocation controls.
+
+Tradeoff:
+
+- stateless request auth vs centralized session control.
+
+<a id="section-19"></a>
+## 19. Known Gaps and Prioritized Roadmap
+
+Priority 0 (correctness/security):
+
+1. Fix refresh token hash verification using `matches`.
+2. Correct transaction base path mapping to `/v1/api`.
+3. Standardize HTTP status/error semantics.
+
+Priority 1 (resilience/consistency):
+
+1. Add idempotency keys to write APIs.
+2. Add distributed locking for refund path.
+3. Move rate limiting to Redis-backed distributed policy.
+
+Priority 2 (engineering excellence):
+
+1. Add complete unit + integration + API test suite.
+2. Add OpenAPI generation and examples.
+3. Add richer observability and alerting dashboards.
+
+Priority 3 (feature maturity):
+
+1. Add report APIs and persisted report outputs.
+2. Add inventory stock tracking integration.
+3. Add audit trails and compliance exports.
+
+<a id="section-20"></a>
+## 20. Technical References
 
 - Spring Boot reference:
   - https://docs.spring.io/spring-boot/docs/current/reference/html/
@@ -575,7 +810,7 @@ Use Spring Boot test slices and Testcontainers:
   - https://docs.spring.io/spring-data/mongodb/reference/
 - Spring Data Redis:
   - https://docs.spring.io/spring-data/redis/reference/
-- Spring for Apache Kafka:
+- Spring Kafka:
   - https://docs.spring.io/spring-kafka/reference/
 - PostgreSQL docs:
   - https://www.postgresql.org/docs/
@@ -589,25 +824,7 @@ Use Spring Boot test slices and Testcontainers:
   - https://micrometer.io/docs
 - Prometheus:
   - https://prometheus.io/docs/introduction/overview/
-- Grafana docs:
+- Grafana:
   - https://grafana.com/docs/
-- JWT fundamentals:
+- JWT:
   - https://jwt.io/introduction
-- SOLID principles (overview):
-  - https://www.baeldung.com/solid-principles
-
-## 19. Final Notes for Beginners
-
-If you are learning backend design, this repository is a good practical example of:
-
-- REST API layering (controller/service/dao/repository),
-- security + JWT flow,
-- combining SQL and NoSQL,
-- caching and async messaging.
-
-It is also a good exercise repository for implementing production hardening:
-
-- robust error semantics,
-- distributed rate limiting/locking,
-- consistency-safe multi-store writes,
-- and complete automated test coverage.

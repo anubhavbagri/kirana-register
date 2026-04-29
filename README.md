@@ -47,11 +47,9 @@ When a customer requests a refund, the system should reverse the transaction by 
 2. Adjust inventory and financial records to account for the refunded products.
 3. Update the reporting APIs to reflect changes in total credits, debits, net_flow, and inventory after refunds are processed.
 
----
+## Project Guide
 
-## Project Guide (Implementation-Aware)
-
-This section is additive and documents what the current codebase does today, plus practical guidance to run and extend it.
+This section documents what the current codebase does, plus practical guidance to run and extend it.
 
 ### 1) What This Service Actually Does
 
@@ -287,8 +285,4 @@ So endpoints exposed by current implementation are:
 |-- prometheus.yml
 ```
 
-### 8) Architecture Deep Dive
-
-For HLD, LLD, design principles, schema details, scalability, testing strategy, and production-grade tradeoffs, read:
-
-- `architecture.md`
+> Architecture Deep Dive: [architecture](./architecture.md)
