@@ -42,7 +42,7 @@ services:
       - kirana_store_network
 
   kafka:
-    image: bitnami/kafka
+    image: apache/kafka:latest
     container_name: kafka
     ports:
       - 9092:9092
@@ -101,7 +101,7 @@ services:
       - mongodb
       - kafka
     volumes:
-      - /Users/balajim/Desktop/Kirana-Store/Kirana-store/.logs:/logs
+      - ./logs:/logs
     networks:
       - kirana_store_network
 
