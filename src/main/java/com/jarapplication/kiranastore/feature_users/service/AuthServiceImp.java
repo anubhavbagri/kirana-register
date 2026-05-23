@@ -13,21 +13,22 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.stereotype.Service;
 
-@Slf4j
-@Service
+@Slf4j // SLF4J logger injection: Lombok logger auto-creation
+@Service // Marks this class as Business Logic Layer: Creates bean + semantic clarity (“this does business logic”)
 public class AuthServiceImp implements AuthService {
 
+    // immutable (can't be changed after construction) + thread-safe
     private final AuthenticationManager authenticationManager;
     private final JwtUtil jwtUtil;
     private final UserService userService;
     private final RefreshTokenServiceImp refreshTokenService;
 
-    @Autowired
+    @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
     public AuthServiceImp(
             AuthenticationManager authenticationManager,
             JwtUtil jwtUtil,
             UserService userService,
-            RefreshTokenServiceImp refreshTokenService) {
+            RefreshTokenServiceImp refreshTokenService) { // constructor injection
         this.authenticationManager = authenticationManager;
         this.jwtUtil = jwtUtil;
         this.userService = userService;

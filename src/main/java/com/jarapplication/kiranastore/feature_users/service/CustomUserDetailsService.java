@@ -12,12 +12,12 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
 
-@Service
+@Service // Marks this class as Business Logic Layer: Creates bean + semantic clarity (“this does business logic”)
 public class CustomUserDetailsService implements UserDetailsService {
 
     private final UserRepository userRepository;
 
-    @Autowired
+    @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
     public CustomUserDetailsService(UserRepository userRepository) {
         this.userRepository = userRepository;
     }
@@ -34,6 +34,21 @@ public class CustomUserDetailsService implements UserDetailsService {
         String userName = user.get().getUsername();
         List<String> roleNames = user.get().getRoles();
         String password = user.get().getPassword();
+        /*
+        // Your User entity (MongoDB document):
+        User {
+            id: "user-123"
+            username: "admin"
+            password: "$2a$10$..." (BCrypt hash)
+            roles: ["ROLE_ADMIN", "ROLE_USER"]
+        }
+        // Converted to Spring Security's UserDetails
+        // Why convert?
+        ├─ Spring Security expects UserDetails interface
+        ├─ Your User class is MongoDB entity (doesn't implement UserDetails)
+        ├─ Adapter design pattern: convert domain model → framework interface
+        └─ Now AuthenticationManager can use it
+        */
         return org.springframework.security.core.userdetails.User.withUsername(userName)
                 .password(password)
                 .roles(roleNames.toArray(new String[0]))

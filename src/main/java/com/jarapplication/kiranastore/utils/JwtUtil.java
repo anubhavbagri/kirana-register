@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.function.Function;
 import org.springframework.stereotype.Component;
 
-@Component
+@Component // Marks this class as a Spring-managed bean. Broader than @Service or @Repository.
 public class JwtUtil {
     private final Key SECRET_KEY = Keys.hmacShaKeyFor(SecurityConstants.SECRET_KEY.getBytes());
 

@@ -3,7 +3,7 @@ package com.jarapplication.kiranastore.feature_users.models;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 
-@Data
+@Data // ← Lombok annotation eliminates boilerplate(getter/setter/equals/hashCode/toString methods auto-generated at compile Time)
 @AllArgsConstructor
 public class AuthResponse {
     private String userId;

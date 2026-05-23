@@ -13,13 +13,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 
-@Service
+@Service // Marks this class as Business Logic Layer: Creates bean + semantic clarity (“this does business logic”)
 public class UserServiceImp implements UserService {
 
-    private final UserDAO userDao;
+    private final UserDAO userDao; // immutable (can't be changed after construction) + thread-safe
 
-    @Autowired
-    public UserServiceImp(UserDAO userDao) {
+    @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
+    public UserServiceImp(UserDAO userDao) { // constructor injection
         this.userDao = userDao;
     }
 
@@ -56,7 +56,17 @@ public class UserServiceImp implements UserService {
      *
      * @param userRequest
      * @return
-     */
+        1. Spring detects @Override
+        ├─ Checks if parent interface has this method ✓
+
+        2. Spring detects @CapitalizeMethod
+        ├─ CapitalizeAspect intercepts this method
+        ├─ Capitalizes @Capitalize fields in userRequest
+        ├─ Executes save() logic
+        └─ Returns result
+
+        3. Order doesn't matter (different aspects handle each)
+    */
     @Override
     @CapitalizeMethod
     public UserRequest save(UserRequest userRequest) {

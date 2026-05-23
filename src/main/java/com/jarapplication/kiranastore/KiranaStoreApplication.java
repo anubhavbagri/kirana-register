@@ -1,3 +1,5 @@
+// Spring Boot entry point
+
 package com.jarapplication.kiranastore;
 
 import org.springframework.boot.SpringApplication;

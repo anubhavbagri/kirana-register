@@ -6,12 +6,12 @@ import com.jarapplication.kiranastore.feature_users.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-@Component
+@Component // Marks this class as a Spring-managed bean. Broader than @Service or @Repository.
 public class UserDAO {
 
     UserRepository userRepository;
 
-    @Autowired
+    @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
     UserDAO(UserRepository userRepository) {
         this.userRepository = userRepository;
     }
@@ -19,6 +19,9 @@ public class UserDAO {
     /**
      * @param user
      * @return
+     * @CapitalizeMethod -> Custom AOP annotation that intercepts this method and:
+     * 1. Before execution: Capitalizes @Capitalize fields in the user object
+     * 2. After execution: Returns the saved user
      */
     @CapitalizeMethod
     public User save(User user) {
