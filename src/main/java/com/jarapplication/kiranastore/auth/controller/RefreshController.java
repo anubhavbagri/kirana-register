@@ -12,12 +12,12 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-@RestController
-@RequestMapping
+@RestController // Marks class as a REST API controller that handles HTTP requests and returns JSON/XML
+@RequestMapping // Base URL; Empty = "/"
 public class RefreshController {
     private final RefreshTokenService refreshTokenService;
 
-    @Autowired
+    @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
     public RefreshController(RefreshTokenService refreshTokenService) {
         this.refreshTokenService = refreshTokenService;
     }
@@ -29,8 +29,11 @@ public class RefreshController {
      * @param refreshToken
      * @return
      * @throws AuthenticationException
+     * @GetMapping("/generate-token") maps HTTP GET requests to `/generate-token` endpoint to this method
+     * @RequestHeader Extracts HTTP headers and binds to method parameters.
+     *
      */
-    @GetMapping("/generate-token")
+    @GetMapping("/generate-token") // Retrieves Data <BASE_URL>/generate-token returns: AuthResponse JSON
     public AuthResponse refreshAccessToken(
             @RequestHeader(AUTHORIZATION) String accessToken,
             @RequestHeader(REFRESH_TOKEN) String refreshToken)

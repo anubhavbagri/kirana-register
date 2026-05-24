@@ -37,17 +37,36 @@ public class RefreshTokenServiceImp implements RefreshTokenService {
      */
     @Override
     public RefreshTokenModel saveRefreshToken(String userId) {
+        // 1. Generate random UUID
         String token = UUID.randomUUID().toString();
+        // 2. Hash it (never store plaintext)
         String tokenHash = encoder.encode(token);
+        // 3. Create MongoDB document
         RefreshToken refreshToken = new RefreshToken();
         refreshToken.setUserId(userId);
         refreshToken.setToken(tokenHash);
         refreshToken.setCreatedAt(new Date());
         refreshToken.setTimeout(
                 new DateTime(new Date()).plus(REFRESH_TOKEN_EXPIRATION_TIME).toDate());
+        // 4. Save to MongoDB
         refreshToken = refreshTokenDao.save(refreshToken);
-        return new RefreshTokenModel(refreshToken.getToken(), refreshToken.getId());
+
+        // 5. Return model with unhashed token
+        return new RefreshTokenModel(refreshToken.getToken(), refreshToken.getId()); // ← UNHASHED (sent to client once)
     }
+
+    /*
+    The sessionID matters because:
+    // Later, when client refreshes:
+    POST /generate-token
+    Headers: Refresh-Token: <uuid>
+
+    // RefreshTokenService validates:
+    1. Parse access_token (even if expired) → extract sessionId
+    2. Lookup MongoDB by sessionId
+    3. Compare provided refresh_token against stored bcrypt hash
+    4. Issue new access_token (keeping same sessionId)
+    */
 
     /**
      * Implementation to generate new Access token

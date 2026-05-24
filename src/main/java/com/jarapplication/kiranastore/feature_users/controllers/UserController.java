@@ -19,7 +19,7 @@ public class UserController {
 
     @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
     public UserController(UserServiceImp userService, AuthServiceImp authServiceImp) {
-        this.userService = userService;
+        this.userService = userService; // ← Spring injected
         this.authService = authServiceImp;
     }
 

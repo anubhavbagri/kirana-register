@@ -6,7 +6,7 @@ import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-@Component
+@Component // Marks this class as a Spring-managed bean. Broader than @Service or @Repository.
 public class RefreshTokenDAO {
     private final RefreshTokenRepository refreshTokenRepository;
 

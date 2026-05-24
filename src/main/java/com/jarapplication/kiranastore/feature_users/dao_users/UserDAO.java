@@ -13,7 +13,7 @@ public class UserDAO {
 
     @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
     UserDAO(UserRepository userRepository) {
-        this.userRepository = userRepository;
+        this.userRepository = userRepository; // ← Spring injected
     }
 
     /**

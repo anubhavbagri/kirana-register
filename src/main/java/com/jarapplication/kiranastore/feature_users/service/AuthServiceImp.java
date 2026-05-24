@@ -45,17 +45,36 @@ public class AuthServiceImp implements AuthService {
     @Override
     public AuthResponse authenticate(String username, String password) {
         log.info("authenticate " + username);
+        // Step 2a: Null check
         if (username == null || password == null) {
             throw new IllegalArgumentException(USER_NAME_OR_PASSWORD_IS_NULL);
         }
+        // Step 2b: The CRITICAL line — authenticate credentials
         authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(username, password));
+
+        // Step 2c: Get roles from database (ONLY if auth succeeded)
         List<String> roles = userService.getUserRolesByUsername(username);
+
+         // Step 2d: Get userId from database
         String userId = userService.getUserIdByUsername(username);
+
+         // Step 2e: Save refresh token to MongoDB
         RefreshTokenModel refreshTokenModel = refreshTokenService.saveRefreshToken(userId);
 
+        // Step 2f: Generate JWT token
         String jwtToken =
                 jwtUtil.generateToken(username, roles, userId, refreshTokenModel.getSessionId());
+
+        // Step 2g: Return all three pieces in `data` section of ApiResponse
         return new AuthResponse(userId, jwtToken, refreshTokenModel.getRefreshToken());
     }
 }
+
+/*
+Smart Approach:
+    Validate credentials FIRST (fail fast if wrong password)
+    Query database only if credentials valid
+    Generate token
+    Return
+*/

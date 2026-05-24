@@ -20,7 +20,7 @@ public class UserServiceImp implements UserService {
 
     @Autowired // Explicitly tells Spring: “Use this constructor for dependency injection”
     public UserServiceImp(UserDAO userDao) { // constructor injection
-        this.userDao = userDao;
+        this.userDao = userDao; // ← Spring injected
     }
 
     /**
@@ -74,7 +74,7 @@ public class UserServiceImp implements UserService {
             throw new IllegalArgumentException(USER_REQUEST_IS_NULL);
         }
         User user = UserDtoUtil.userDTO(userRequest);
-        User userExists = userDao.findByUsername(user.getUsername());
+        User userExists = userDao.findByUsername(user.getUsername()); // Checks duplicate
         if (userExists != null) {
             throw new UserNameExistsException(USER_ALREADY_EXISTS);
         }

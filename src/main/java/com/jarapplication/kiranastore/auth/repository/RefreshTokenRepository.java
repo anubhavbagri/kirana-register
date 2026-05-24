@@ -4,5 +4,5 @@ import com.jarapplication.kiranastore.auth.entity.RefreshToken;
 import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.stereotype.Repository;
 
-@Repository
+@Repository // Marks this interface as a data access object (DAO) bean
 public interface RefreshTokenRepository extends MongoRepository<RefreshToken, String> {}
