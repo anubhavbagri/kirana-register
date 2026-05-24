@@ -9,6 +9,106 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 
+/**
+ * GLOBAL EXCEPTION HANDLER: Centralized Error Management
+ *
+ * WHAT IT DOES:
+ * ├─ @ControllerAdvice: Catches exceptions from ANY controller (global)
+ * ├─ @ExceptionHandler: Maps specific exception types to response methods
+ * ├─ Standardizes error responses across entire application
+ * └─ Logs all errors for debugging + monitoring
+ *
+ * WHY IT'S NEEDED:
+ * ├─ Without it: Each controller writes try-catch blocks (boilerplate)
+ * ├─ Consistency: All errors return same format (ApiResponse wrapper)
+ * ├─ Maintainability: Change error response in ONE place
+ * ├─ Logging: Central place to track all exceptions
+ * ├─ Client-friendly: Consistent error messages + error codes
+ * └─ Security: Hide internal stack traces from client (return generic messages)
+ *
+ * DESIGN PATTERN: CENTRALIZED ERROR HANDLING
+ * ├─ Without @ControllerAdvice (BAD):
+ * │   @PostMapping("/api/users")
+ * │   public ApiResponse createUser(UserRequest req) {
+ * │       try {
+ * │           // business logic
+ * │       } catch (UserNameExistsException e) {
+ * │           ApiResponse response = new ApiResponse();
+ * │           response.setSuccess(false);
+ * │           response.setErrorMessage(e.getMessage());
+ * │           return response;
+ * │       } catch (IllegalArgumentException e) {
+ * │           // similar error handling
+ * │       }
+ * │   }
+ * │   // Repeated in 100 other endpoints!
+ * │
+ * └─ With @ControllerAdvice (GOOD):
+ *     └─ Write try-catch once in this class
+ *        └─ All controllers automatically use it
+ *
+ * HTTP STATUS CODES vs ApiResponse.status:
+ * ├─ HTTP 200: Backend suggests success to Spring/browsers (conventional)
+ * ├─ ApiResponse.status: Your custom field (for frontend logic)
+ * ├─ DESIGN CHOICE: Return 200 with custom status field
+ * │   Rationale:
+ * │   ├─ Some HTTP clients only check HTTP status
+ * │   ├─ 200 for all responses simplifies client logic
+ * │   ├─ ApiResponse.status tells detailed error type
+ * │   └─ Trade-off: Violates REST best practices but simpler implementation
+ * │
+ * ├─ BETTER approach (not your code):
+ * │   ├─ UserNameExistsException → HTTP 409 Conflict
+ * │   ├─ RateLimitExceededException → HTTP 429 Too Many Requests
+ * │   ├─ IllegalArgumentException → HTTP 400 Bad Request
+ * │   └─ Then client reads HTTP status code (no need for custom field)
+ *
+ * EXCEPTION HIERARCHY (Your Custom Exceptions):
+ * ├─ RuntimeException (Unchecked)
+ * │   ├─ UserNameExistsException (extends RuntimeException)
+ * │   ├─ RateLimitExceededException (extends RuntimeException)
+ * │   └─ Why Unchecked?
+ * │      └─ Checked exceptions force try-catch everywhere (boilerplate)
+ * │         Unchecked can be thrown anywhere without declaring
+ * │
+ * ├─ Spring Built-in exceptions also caught:
+ * │   ├─ HttpMessageNotReadableException: Invalid JSON in request body
+ * │   └─ MissingServletRequestParameterException: Missing @RequestParam
+ *
+ * EXCEPTION FLOW:
+ * ├─ Client sends invalid request
+ * │   └─ GET /api/users?id=  (missing id parameter)
+ * │
+ * ├─ Spring detects missing @RequestParam
+ * │   └─ Throws MissingServletRequestParameterException
+ * │
+ * ├─ Exception travels up call stack
+ * │   └─ DispatcherServlet catches it
+ * │
+ * ├─ DispatcherServlet searches for @ExceptionHandler method
+ * │   └─ Finds: handleSpringRequestParamException() in this class
+ * │
+ * ├─ Handler executes:
+ * │   ├─ Creates ApiResponse
+ * │   ├─ Sets success=false, errorMessage, errorCode
+ * │   └─ Returns ResponseEntity(apiResponse, HttpStatus.OK)
+ * │
+ * └─ Response sent to client:
+ *     └─ HTTP 200 OK + JSON error details
+ *
+ * LOGGING (@Slf4j):
+ * ├─ Lombok auto-generates logger
+ * ├─ log.error("message", exception): Logs full stack trace
+ * ├─ log.error("message {}", variable): Format strings
+ * ├─ Why log?: Debugging + monitoring + alerting
+ * └─ Logs stored in: ./logs/sample.log (configured in application.properties)
+ *
+ * ERROR CODE MAPPING:
+ * ├─ "10002": Invalid request (body or parameter)
+ * ├─ "429": Rate limit exceeded
+ * ├─ "error": Generic error (fallback)
+ * └─ Why codes? Clients can parse machine-readable codes → localize messages
+ */
 @Slf4j
 @ControllerAdvice
 public class ExceptionController {
